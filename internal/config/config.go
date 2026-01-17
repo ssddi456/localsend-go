@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/meowrain/localsend-go/internal/pkg/security"
@@ -30,6 +31,9 @@ type Config struct {
 		HttpFileServer  bool `yaml:"http_file_server"`
 		LocalSendServer bool `yaml:"local_send_server"`
 	} `yaml:"functions"`
+	Webhook struct {
+		UploadCompleteURL string `yaml:"upload_complete_url"`
+	} `yaml:"webhook"`
 }
 
 // random device name
@@ -55,7 +59,26 @@ func generateRandomName() string {
 }
 
 func init() {
-	bytes, err := os.ReadFile("internal/config/config.yaml")
+	var bytes []byte
+	var err error
+
+	var configPath string = "internal/config/config.yaml"
+
+	// 在初始化日志之前设置自定义配置文件路径（如果指定的话）
+	// 这需要在 logger.InitLogger() 之前完成，因为配置初始化发生在 init() 中
+	// 注意：flag.Parse() 会在 flagParse() 中调用，所以需要手动解析 config 标志
+	for i, arg := range os.Args {
+		if strings.HasPrefix(arg, "--config=") {
+			configPath = arg[9:] // 去掉 "--config=" 前缀
+			break
+		} else if arg == "--config" && i+1 < len(os.Args) {
+			configPath = os.Args[i+1]
+			break
+		}
+	}
+
+	// 尝试从文件系统读取本地配置文件
+	bytes, err = os.ReadFile(configPath)
 	if err != nil {
 		logger.Debug("Read config.yaml from file system failed, using embedded config. Error: " + err.Error())
 		bytes, err = embeddedConfig.ReadFile("config.yaml")
@@ -96,6 +119,10 @@ func GetPort() int {
 		return ConfigData.Server.Port
 	}
 	return ServerPort
+}
+
+func GetWebhookURL() string {
+	return ConfigData.Webhook.UploadCompleteURL
 }
 
 func GetProtocol() string {

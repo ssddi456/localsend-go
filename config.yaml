@@ -1,6 +1,6 @@
 # Device name shown to other devices
 # Leave empty to use random generated name
-device_name: "MeowRain Device"
+device_name: "MeowRain Device 1"
 
 # Server configuration
 server:
@@ -12,3 +12,9 @@ server:
 functions:
   http_file_server: true
   local_send_server: true
+
+# Webhook configuration
+webhook:
+  # URL to send upload complete notifications to
+  # Leave empty to disable webhook
+  upload_complete_url: ""

@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/meowrain/localsend-go/internal/config"
 	"github.com/meowrain/localsend-go/internal/models"
+	"github.com/meowrain/localsend-go/internal/pkg/webhook"
 
 	"github.com/meowrain/localsend-go/internal/utils/clipboard"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
@@ -177,6 +179,15 @@ func ReceiveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Success("File saved to:", filePath)
+	// 获取文件大小
+	fileInfo, err := os.Stat(filePath)
+	var fileSize int64
+	if err == nil {
+		fileSize = fileInfo.Size()
+	}
+
+	logger.Success("V2 File saved to:", filePath)
+	// 发送成功的webhook通知
+	webhook.SendUploadCompleteWebhook(config.GetWebhookURL(), filePath, fileName, fileSize, true, "")
 	w.WriteHeader(http.StatusOK)
 }

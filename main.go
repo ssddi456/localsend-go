@@ -18,6 +18,7 @@ import (
 	"github.com/meowrain/localsend-go/internal/handlers"
 	"github.com/meowrain/localsend-go/internal/pkg/security"
 	"github.com/meowrain/localsend-go/internal/pkg/server"
+	"github.com/meowrain/localsend-go/internal/service"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 	"github.com/meowrain/localsend-go/static"
 	qrcode "github.com/skip2/go-qrcode"
@@ -362,6 +363,19 @@ func ReceiveMode() {
 	select {}
 }
 
+func ReceiveModeBackground() {
+	err := os.MkdirAll("uploads", 0o755)
+	if err != nil {
+		logger.Errorf("Failed to create uploads directory: %v", err)
+		return
+	}
+	// 在后台运行，不显示 TUI
+	logger.Info("LocalSend Receive mode started in background")
+	logger.Info("Waiting to receive files...")
+	discovery.ListenAndStartBroadcasts(nil)
+	select {}
+}
+
 func SendMode(filePath string) {
 	err := handlers.SendFile(filePath)
 	if err != nil {
@@ -378,13 +392,28 @@ func flagParse(httpServer *http.ServeMux, port int, flagOpen *bool) {
 	showHelp := func() {
 		fmt.Println("Usage: <command> [arguments]")
 		fmt.Println("Commands:")
-		fmt.Println("  web                 Start Web mode")
-		fmt.Println("  send <file_path>    Start Send mode (file path required)")
-		fmt.Println("  receive             Start Receive mode")
-		fmt.Println("  help                Display this help information")
+		fmt.Println("  web                       Start Web mode")
+		fmt.Println("  send <file_path>          Start Send mode (file path required)")
+		fmt.Println("  receive                   Start Receive mode")
+		fmt.Println("  daemon                    Start Receive mode in background (for service)")
+		fmt.Println("  service install           Install Receive mode as system service (auto-start on boot)")
+		fmt.Println("  service uninstall         Uninstall system service")
+		fmt.Println("  service start             Start the system service")
+		fmt.Println("  service stop              Stop the system service")
+		fmt.Println("  service status            Check system service status")
+		fmt.Println("  help                      Display this help information")
 		fmt.Println("Options:")
-		fmt.Println("  --help              Display this help information")
-		fmt.Println("  --port=<number>     Specify server port (default: 53317)")
+		fmt.Println("  --help                    Display this help information")
+		fmt.Println("  --port=<number>           Specify server port (default: 53317)")
+		fmt.Println("  --config=<path>           Specify custom config file path")
+		fmt.Println("  --daemon                  Start Receive mode in background")
+		fmt.Println("")
+		fmt.Println("Examples:")
+		fmt.Println("  localsend-go receive")
+		fmt.Println("  localsend-go send /path/to/file")
+		fmt.Println("  localsend-go --config=/etc/localsend/config.yaml receive")
+		fmt.Println("  localsend-go service install   (requires admin/root)")
+		fmt.Println("  localsend-go service status")
 	}
 	flag.Usage = showHelp
 	// 解析标准flag参数
@@ -416,6 +445,15 @@ func flagParse(httpServer *http.ServeMux, port int, flagOpen *bool) {
 			}
 		case "receive":
 			ReceiveMode()
+		case "daemon":
+			ReceiveModeBackground()
+		case "service":
+			if len(os.Args) > 2 {
+				handleServiceCommand(os.Args[2])
+			} else {
+				logger.Error("Service command required: install, uninstall, start, stop, status")
+				ExitMode()
+			}
 		case "help":
 			showHelp()
 			ExitMode()
@@ -423,10 +461,67 @@ func flagParse(httpServer *http.ServeMux, port int, flagOpen *bool) {
 	}
 }
 
+// handleServiceCommand 处理服务管理命令
+func handleServiceCommand(command string) {
+	switch command {
+	case "install":
+		fmt.Println("Installing LocalSend Receive mode as system service...")
+		if err := service.InstallService(); err != nil {
+			fmt.Printf("❌ Install failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ Service installed successfully!")
+		fmt.Println("The service will start automatically on boot in Receive mode.")
+
+	case "uninstall":
+		fmt.Println("Uninstalling LocalSend Receive mode service...")
+		if err := service.UninstallService(); err != nil {
+			fmt.Printf("❌ Uninstall failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ Service uninstalled successfully!")
+
+	case "start":
+		fmt.Println("Starting LocalSend Receive mode service...")
+		if err := service.StartInBackground(); err != nil {
+			fmt.Printf("❌ Start failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ Service started successfully!")
+
+	case "stop":
+		fmt.Println("Stopping LocalSend Receive mode service...")
+		if err := service.StopService(); err != nil {
+			fmt.Printf("❌ Stop failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ Service stopped successfully!")
+
+	case "status":
+		status, err := service.GetServiceStatus()
+		if err != nil {
+			fmt.Printf("❌ Status check failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Service Status: %s\n", status)
+
+	default:
+		fmt.Printf("Unknown service command: %s\n", command)
+		fmt.Println("Available commands: install, uninstall, start, stop, status")
+		os.Exit(1)
+	}
+
+	ExitMode()
+}
+
 var port int
+var daemonMode bool
+var configPath string
 
 func init() {
 	flag.IntVar(&port, "port", 0, "Port to listen on (default from config or 53317)")
+	flag.BoolVar(&daemonMode, "daemon", false, "Start in daemon mode (background)")
+	flag.StringVar(&configPath, "config", "", "Path to custom config file (default: ./internal/config/config.yaml)")
 }
 
 func main() {
@@ -438,6 +533,7 @@ func main() {
 		fmt.Println("\n收到中断信号，正在退出...")
 		os.Exit(0)
 	}()
+
 	logger.InitLogger()
 
 	// Initialize security context (certificate)
@@ -458,9 +554,17 @@ func main() {
 
 	/* Send and receive section */
 	if config.ConfigData.Functions.LocalSendServer {
+		// V1 endpoints
+		httpServer.HandleFunc("/api/localsend/v1/info", handlers.GetInfoV1Handler)
+		httpServer.HandleFunc("/api/localsend/v1/register", handlers.RegisterV1Handler)
+		httpServer.HandleFunc("/api/localsend/v1/send-request", handlers.SendRequestV1Handler)
+		httpServer.HandleFunc("/api/localsend/v1/send", handlers.SendV1Handler)
+		httpServer.HandleFunc("/api/localsend/v1/cancel", handlers.CancelV1Handler)
+
+		// V2 endpoints
 		httpServer.HandleFunc("/api/localsend/v2/prepare-upload", handlers.PrepareReceive)
 		httpServer.HandleFunc("/api/localsend/v2/upload", handlers.ReceiveHandler)
-		httpServer.HandleFunc("/api/localsend/v2/info", handlers.GetInfoHandler)
+		httpServer.HandleFunc("/api/localsend/v2/info", handlers.GetInfoV2Handler)
 		httpServer.HandleFunc("/api/localsend/v2/cancel", handlers.HandleCancel)
 	}
 
@@ -546,5 +650,8 @@ func main() {
 		if mode == "🌎 Web" {
 			WebServerMode(httpServer, port)
 		}
+	} else if daemonMode {
+		// 如果指定了 --daemon 标志，使用后台模式
+		ReceiveModeBackground()
 	}
 }

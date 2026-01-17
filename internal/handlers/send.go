@@ -50,7 +50,7 @@ func SendFileToOtherDevicePrepare(ip string, path string) (*models.PrepareReceiv
 
 	// 创建并填充 PrepareReceiveRequest 结构体
 	request := models.PrepareReceiveRequest{
-		Info: models.Info{
+		Info: models.BroadcastMessage{
 			Alias:       discovery.Message.Alias,
 			Version:     discovery.Message.Version,
 			DeviceModel: discovery.Message.DeviceModel,

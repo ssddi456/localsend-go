@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/meowrain/localsend-go/internal/pkg/security"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 	"gopkg.in/yaml.v2"
 )
@@ -14,10 +15,18 @@ import (
 //go:embed config.yaml
 var embeddedConfig embed.FS
 
+const (
+	ServerPort = 53317
+)
+
 type Config struct {
 	DeviceName   string `yaml:"device_name"`
 	NameOfDevice string // Actual device name used in runtime
-	Functions    struct {
+	Server       struct {
+		HTTPS bool `yaml:"https"`
+		Port  int  `yaml:"port"`
+	} `yaml:"server"`
+	Functions struct {
 		HttpFileServer  bool `yaml:"http_file_server"`
 		LocalSendServer bool `yaml:"local_send_server"`
 	} `yaml:"functions"`
@@ -59,6 +68,11 @@ func init() {
 		logger.Failedf("Failed to parse config file: %v", err)
 	}
 
+	// Set defaults if not specified
+	if ConfigData.Server.Port == 0 {
+		ConfigData.Server.Port = 53317
+	}
+
 	// Use configured device name if provided, otherwise generate a random one
 	if ConfigData.DeviceName != "" {
 		ConfigData.NameOfDevice = ConfigData.DeviceName
@@ -67,4 +81,26 @@ func init() {
 		ConfigData.NameOfDevice = generateRandomName()
 		logger.Debug("Using randomly generated device name: " + ConfigData.NameOfDevice)
 	}
+}
+
+func GetCertificateFingerprint() string {
+	ctx := security.GetSecurityContext()
+	if ctx != nil {
+		return ctx.CertificateHash
+	}
+	return "no-certificate"
+}
+
+func GetPort() int {
+	if ConfigData.Server.Port != 0 {
+		return ConfigData.Server.Port
+	}
+	return ServerPort
+}
+
+func GetProtocol() string {
+	if ConfigData.Server.HTTPS {
+		return "https"
+	}
+	return "http"
 }

@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,8 +12,8 @@ import (
 	"time"
 
 	"github.com/meowrain/localsend-go/internal/discovery"
-	"github.com/meowrain/localsend-go/internal/discovery/shared"
 	"github.com/meowrain/localsend-go/internal/models"
+	"github.com/meowrain/localsend-go/internal/pkg/httpclient"
 	"github.com/meowrain/localsend-go/internal/tui"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 	"github.com/meowrain/localsend-go/internal/utils/sha256"
@@ -52,14 +51,14 @@ func SendFileToOtherDevicePrepare(ip string, path string) (*models.PrepareReceiv
 	// 创建并填充 PrepareReceiveRequest 结构体
 	request := models.PrepareReceiveRequest{
 		Info: models.Info{
-			Alias:       shared.Message.Alias,
-			Version:     shared.Message.Version,
-			DeviceModel: shared.Message.DeviceModel,
-			DeviceType:  shared.Message.DeviceType,
-			Fingerprint: shared.Message.Fingerprint,
-			Port:        shared.Message.Port,
-			Protocol:    shared.Message.Protocol,
-			Download:    shared.Message.Download,
+			Alias:       discovery.Message.Alias,
+			Version:     discovery.Message.Version,
+			DeviceModel: discovery.Message.DeviceModel,
+			DeviceType:  discovery.Message.DeviceType,
+			Fingerprint: discovery.Message.Fingerprint,
+			Port:        discovery.Message.Port,
+			Protocol:    discovery.Message.Protocol,
+			Download:    discovery.Message.Download,
 		},
 		Files: files,
 	}
@@ -71,15 +70,10 @@ func SendFileToOtherDevicePrepare(ip string, path string) (*models.PrepareReceiv
 	}
 
 	// 发送POST请求
-	url := fmt.Sprintf("https://%s:53317/api/localsend/v2/prepare-upload", ip)
-	client := &http.Client{
-		Timeout: 60 * time.Second, // 传输超时
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // 忽略TLS
-			},
-		},
-	}
+	protocol := discovery.Message.Protocol
+	url := fmt.Sprintf("%s://%s:%d/api/localsend/v2/prepare-upload", protocol, ip, discovery.Message.Port)
+	client := httpclient.GetClient(protocol, 60*time.Second)
+
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(requestJson))
 	if err != nil {
 		return nil, fmt.Errorf("error sending POST request: %w", err)
@@ -151,8 +145,9 @@ func uploadFile(ctx context.Context, ip, sessionId, fileId, token, filePath stri
 	)
 
 	// 构建文件上传的 URL
-	uploadURL := fmt.Sprintf("https://%s:53317/api/localsend/v2/upload?sessionId=%s&fileId=%s&token=%s",
-		ip, sessionId, fileId, token)
+	protocol := discovery.Message.Protocol
+	uploadURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/upload?sessionId=%s&fileId=%s&token=%s",
+		protocol, ip, discovery.Message.Port, sessionId, fileId, token)
 
 	// 使用 pipe 来避免将整个文件加载到内存中
 	pr, pw := io.Pipe()
@@ -172,15 +167,8 @@ func uploadFile(ctx context.Context, ip, sessionId, fileId, token, filePath stri
 
 	// 创建带有 TLS 配置的 HTTP 客户端
 	client := &http.Client{
-		Timeout: 30 * time.Minute,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // 跳过证书验证
-			},
-			MaxIdleConns:       100,
-			IdleConnTimeout:    90 * time.Second,
-			DisableCompression: true,
-		},
+		Timeout:   30 * time.Minute,
+		Transport: httpclient.GetTransport(protocol),
 	}
 
 	// 创建请求

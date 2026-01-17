@@ -16,6 +16,7 @@ import (
 	"github.com/meowrain/localsend-go/internal/config"
 	"github.com/meowrain/localsend-go/internal/discovery"
 	"github.com/meowrain/localsend-go/internal/handlers"
+	"github.com/meowrain/localsend-go/internal/pkg/security"
 	"github.com/meowrain/localsend-go/internal/pkg/server"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 	"github.com/meowrain/localsend-go/static"
@@ -325,16 +326,21 @@ func WebServerMode(httpServer *http.ServeMux, port int) {
 	}
 	ips, _ := discovery.GetLocalIP()
 	localIP := ""
+	protocol := "http"
+	if config.ConfigData.Server.HTTPS {
+		protocol = "https"
+	}
+
 	for _, ip := range ips {
 		ipStr := ip.String()
 		if strings.HasPrefix(ipStr, "10.") || strings.HasPrefix(ipStr, "192.168.") {
-			logger.Infof("If you opened the HTTP file server, you can view your files on %s", fmt.Sprintf("http://%v:%d", ip, port))
+			logger.Infof("If you opened the HTTP file server, you can view your files on %s", fmt.Sprintf("%s://%v:%d", protocol, ip, port))
 		}
 		if strings.HasPrefix(ipStr, "192.168.") {
 			localIP = ip.String()
 		}
 	}
-	qr, err := qrcode.New(fmt.Sprintf("http://%s:%d", localIP, port), qrcode.Highest)
+	qr, err := qrcode.New(fmt.Sprintf("%s://%s:%d", protocol, localIP, port), qrcode.Highest)
 	if err != nil {
 		fmt.Println("生成二维码失败:", err)
 		return
@@ -420,7 +426,7 @@ func flagParse(httpServer *http.ServeMux, port int, flagOpen *bool) {
 var port int
 
 func init() {
-	flag.IntVar(&port, "port", 53317, "Port to listen on")
+	flag.IntVar(&port, "port", 0, "Port to listen on (default from config or 53317)")
 }
 
 func main() {
@@ -434,7 +440,20 @@ func main() {
 	}()
 	logger.InitLogger()
 
-	// Start HTTP server
+	// Initialize security context (certificate)
+	if err := security.Initialize(); err != nil {
+		logger.Failedf("Failed to initialize security context: %v", err)
+	}
+
+	// Use port from flag if specified, otherwise from config
+	if port == 0 {
+		port = config.ConfigData.Server.Port
+		if port == 0 {
+			port = 53317
+		}
+	}
+
+	// Start HTTP/HTTPS server
 	httpServer := server.New()
 
 	/* Send and receive section */
@@ -444,10 +463,54 @@ func main() {
 		httpServer.HandleFunc("/api/localsend/v2/info", handlers.GetInfoHandler)
 		httpServer.HandleFunc("/api/localsend/v2/cancel", handlers.HandleCancel)
 	}
+
 	go func() {
-		logger.Info("Server started at :" + fmt.Sprintf("%d", port))
-		if err := http.ListenAndServe(":"+fmt.Sprintf("%d", port), httpServer); err != nil {
-			log.Fatalf("Server failed: %v", err)
+		protocol := "HTTP"
+		if config.ConfigData.Server.HTTPS {
+			protocol = "HTTPS"
+		}
+		logger.Infof("Server started at :%d (%s)", port, protocol)
+
+		// 获取本地 IP 并输出实际侦听地址
+		ips, err := discovery.GetLocalIP()
+		if err == nil {
+			for _, ip := range ips {
+				ipStr := ip.String()
+				if strings.HasPrefix(ipStr, "10.") || strings.HasPrefix(ipStr, "192.168.") || strings.HasPrefix(ipStr, "172.") {
+					logger.Infof("Listening on %s://%s:%d", strings.ToLower(protocol), ip, port)
+				}
+			}
+		}
+
+		if config.ConfigData.Server.HTTPS {
+			// Get TLS configuration from security context
+			ctx := security.GetSecurityContext()
+			if ctx == nil {
+				logger.Failed("Security context not initialized")
+				return
+			}
+
+			tlsConfig, err := ctx.GetTLSConfig()
+			if err != nil {
+				logger.Failedf("Failed to get TLS config: %v", err)
+				return
+			}
+
+			server := &http.Server{
+				Addr:      fmt.Sprintf(":%d", port),
+				Handler:   httpServer,
+				TLSConfig: tlsConfig,
+			}
+
+			logger.Debugf("Certificate fingerprint: %s", ctx.CertificateHash)
+
+			if err := server.ListenAndServeTLS("", ""); err != nil {
+				log.Fatalf("HTTPS server failed: %v", err)
+			}
+		} else {
+			if err := http.ListenAndServe(fmt.Sprintf(":%d", port), httpServer); err != nil {
+				log.Fatalf("HTTP server failed: %v", err)
+			}
 		}
 	}()
 	// 参数解析

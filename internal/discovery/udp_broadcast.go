@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/meowrain/localsend-go/internal/discovery/shared"
+	"github.com/meowrain/localsend-go/internal/config"
 	"github.com/meowrain/localsend-go/internal/models"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 )
@@ -14,7 +14,7 @@ import (
 func ListenForUDPBroadcasts(updates chan<- []models.SendModel) {
 	multicastAddr := &net.UDPAddr{
 		IP:   net.ParseIP(multicastIP),
-		Port: broadcastPort,
+		Port: config.GetPort(),
 	}
 
 	conn, err := net.ListenMulticastUDP("udp", nil, multicastAddr)
@@ -57,17 +57,17 @@ func ListenForUDPBroadcasts(updates chan<- []models.SendModel) {
 
 		logger.Debugf("Parsed message from %s: %+v", remoteAddr.IP.String(), message)
 
-		shared.DevicesMutex.Lock()
-		shared.DiscoveredDevices[remoteAddr.IP.String()] = message
+		DevicesMutex.Lock()
+		DiscoveredDevices[remoteAddr.IP.String()] = message
 
-		devices := make([]models.SendModel, 0, len(shared.DiscoveredDevices))
-		for ip, device := range shared.DiscoveredDevices {
+		devices := make([]models.SendModel, 0, len(DiscoveredDevices))
+		for ip, device := range DiscoveredDevices {
 			devices = append(devices, models.SendModel{
 				IP:         ip,
 				DeviceName: device.Alias,
 			})
 		}
-		shared.DevicesMutex.Unlock()
+		DevicesMutex.Unlock()
 
 		logger.Debugf("Updated devices list: %+v", devices)
 
@@ -81,7 +81,7 @@ func ListenForUDPBroadcasts(updates chan<- []models.SendModel) {
 }
 
 func StartUDPBroadcast() {
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", multicastIP, broadcastPort))
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", multicastIP, config.GetPort()))
 	if err != nil {
 		logger.Errorf("Failed to resolve UDP address: %v", err)
 		return
@@ -112,7 +112,7 @@ func StartUDPBroadcast() {
 	}
 
 	for range ticker.C {
-		data, err := json.Marshal(shared.Message)
+		data, err := json.Marshal(Message)
 		if err != nil {
 			logger.Errorf("Failed to marshal broadcast message: %v", err)
 			failCount++

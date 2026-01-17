@@ -1,4 +1,4 @@
-package shared
+package discovery
 
 import (
 	"sync"
@@ -20,10 +20,10 @@ var Message = models.BroadcastMessage{
 	Alias:       config.ConfigData.NameOfDevice,
 	Version:     "2.0",
 	DeviceModel: utils.CheckOSType(),
-	DeviceType:  "headless",      // CLI工具使用headless类型
-	Fingerprint: "random-string", // 应该生成一个唯一的指纹
-	Port:        53317,
-	Protocol:    "http",
+	DeviceType:  "headless",                         // CLI工具使用headless类型
+	Fingerprint: config.GetCertificateFingerprint(), // 使用证书指纹
+	Port:        config.GetPort(),
+	Protocol:    config.GetProtocol(),
 	Download:    true,
 	Announce:    true,
 }

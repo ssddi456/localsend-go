@@ -1,3 +1,14 @@
+# Device name shown to other devices
+# Leave empty to use random generated name
+device_name: "MeowRain Device"
+
+# Server configuration
+server:
+  # Enable HTTPS (recommended for security)
+  https: true
+  # Server port
+  port: 53317
+
 functions:
   http_file_server: true
   local_send_server: true

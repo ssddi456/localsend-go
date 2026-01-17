@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meowrain/localsend-go/internal/discovery/shared"
+	"github.com/meowrain/localsend-go/internal/config"
 	"github.com/meowrain/localsend-go/internal/models"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 )
@@ -20,7 +20,7 @@ func ListenForHttpBroadCast(updates chan<- []models.SendModel) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		data, err := json.Marshal(shared.Message)
+		data, err := json.Marshal(Message)
 		if err != nil {
 			logger.Errorf("Failed to marshal message: %v", err)
 			continue
@@ -37,13 +37,11 @@ func ListenForHttpBroadCast(updates chan<- []models.SendModel) {
 			wg.Add(1)
 			go func(ip string) {
 				defer wg.Done()
-				url := fmt.Sprintf("https://%s:%d/api/localsend/v2/register", ip, broadcastPort)
-				req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
-				if err != nil {
-					logger.Errorf("Failed to create HTTP request for %s: %v", ip, err)
-					return
-				}
-				req.Header.Set("Content-Type", "application/json")
+
+				// 尝试 v3 和 v2 版本的 API
+				var resp *http.Response
+				var err error
+				var successURL string
 
 				client := &http.Client{
 					Timeout: httpTimeout,
@@ -52,8 +50,23 @@ func ListenForHttpBroadCast(updates chan<- []models.SendModel) {
 					},
 				}
 
-				resp, err := client.Do(req)
-				if err != nil {
+				// 尝试 v3/register
+				urlV3 := fmt.Sprintf("https://%s:%d/api/localsend/v3/register", ip, config.ServerPort)
+				resp, err = makeRequest(client, urlV3, data)
+				if err == nil && resp.StatusCode == http.StatusOK {
+					successURL = urlV3
+				} else {
+					// 回退到 v2/register
+					urlV2 := fmt.Sprintf("https://%s:%d/api/localsend/v2/register", ip, config.ServerPort)
+					resp, err = makeRequest(client, urlV2, data)
+					if err == nil && resp.StatusCode == http.StatusOK {
+						successURL = urlV2
+					}
+				}
+
+				// 两个版本都失败
+				if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
+					logger.Errorf("Failed to reach %s via both v3 and v2 API versions: %v", ip, err)
 					return
 				}
 				defer resp.Body.Close()
@@ -63,32 +76,33 @@ func ListenForHttpBroadCast(updates chan<- []models.SendModel) {
 					logger.Errorf("Failed to read HTTP response body from %s: %v", ip, err)
 					return
 				}
-
 				var response models.BroadcastMessage
 				if err := json.Unmarshal(body, &response); err != nil {
+					logger.Infof("Request URL: %s", successURL)
+					logger.Infof("Request Body: %s", string(body))
 					logger.Errorf("Failed to parse HTTP response from %s: %v", ip, err)
 					return
 				}
 
 				response.LastSeen = time.Now()
 
-				shared.DevicesMutex.Lock()
-				shared.DiscoveredDevices[ip] = response
-				shared.DevicesMutex.Unlock()
+				DevicesMutex.Lock()
+				DiscoveredDevices[ip] = response
+				DevicesMutex.Unlock()
 			}(ip)
 		}
 
 		wg.Wait()
 
-		shared.DevicesMutex.RLock()
-		devices := make([]models.SendModel, 0, len(shared.DiscoveredDevices))
-		for ip, device := range shared.DiscoveredDevices {
+		DevicesMutex.RLock()
+		devices := make([]models.SendModel, 0, len(DiscoveredDevices))
+		for ip, device := range DiscoveredDevices {
 			devices = append(devices, models.SendModel{
 				IP:         ip,
 				DeviceName: device.Alias,
 			})
 		}
-		shared.DevicesMutex.RUnlock()
+		DevicesMutex.RUnlock()
 
 		select {
 		case updates <- devices:
@@ -96,4 +110,14 @@ func ListenForHttpBroadCast(updates chan<- []models.SendModel) {
 			logger.Debug("Updates channel is full, skipping update")
 		}
 	}
+}
+
+// makeRequest 发送 POST 请求
+func makeRequest(client *http.Client, url string, data []byte) (*http.Response, error) {
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return client.Do(req)
 }

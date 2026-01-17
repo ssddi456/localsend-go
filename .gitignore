@@ -1,2 +1,3 @@
 bin/
 !debian/usr/local/bin/
+localsend-go.exe

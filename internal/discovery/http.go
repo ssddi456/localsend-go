@@ -37,6 +37,17 @@ func GetLocalIP() ([]net.IP, error) {
 	return ips, nil
 }
 
+// isPortAccessible 检查指定IP的端口是否可访问
+func isPortAccessible(ip string, port int) bool {
+	address := fmt.Sprintf("%s:%d", ip, port)
+	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	return true
+}
+
 // pingScan 使用 ICMP ping 扫描局域网内的所有活动设备
 func pingScan() ([]string, error) {
 	var ips []string
@@ -44,6 +55,13 @@ func pingScan() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 创建本机IP的映射表以便快速查询
+	localIPMap := make(map[string]bool)
+	for _, ip := range ipGroup {
+		localIPMap[ip.String()] = true
+	}
+
 	for _, i := range ipGroup {
 		ip := i.Mask(net.IPv4Mask(255, 255, 255, 0)) // 假设是 24 子网掩码
 		ip4 := ip.To4()
@@ -58,6 +76,11 @@ func pingScan() ([]string, error) {
 			ip4[3] = byte(i)
 			targetIP := ip4.String()
 
+			// 排除本机IP
+			if localIPMap[targetIP] {
+				continue
+			}
+
 			wg.Add(1)
 			go func(ip string) {
 				defer wg.Done()
@@ -69,11 +92,13 @@ func pingScan() ([]string, error) {
 				pinger.SetPrivileged(true)
 				pinger.Count = 1
 				pinger.Timeout = time.Second * 1
-
 				pinger.OnRecv = func(pkt *probing.Packet) {
-					mu.Lock()
-					ips = append(ips, ip)
-					mu.Unlock()
+					// ping通后，额外检查端口是否可访问
+					if isPortAccessible(ip, ServerPort) {
+						mu.Lock()
+						ips = append(ips, ip)
+						mu.Unlock()
+					}
 				}
 				err = pinger.Run()
 				if err != nil {

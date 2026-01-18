@@ -33,8 +33,14 @@ type Config struct {
 		LocalSendServer bool `yaml:"local_send_server"`
 	} `yaml:"functions"`
 	Webhook struct {
-		UploadCompleteURL string `yaml:"upload_complete_url"`
+		UploadComplete []WebhookEndpoint `yaml:"upload_complete"`
 	} `yaml:"webhook"`
+}
+
+// WebhookEndpoint represents a single webhook endpoint with its URL and parameters
+type WebhookEndpoint struct {
+	URL    string                 `yaml:"url"`
+	Params map[string]interface{} `yaml:"params"`
 }
 
 // random device name
@@ -115,6 +121,8 @@ func loadConfigFromFile() error {
 		if err != nil {
 			return fmt.Errorf("cannot read embedded config file: %v", err)
 		}
+	} else {
+		logger.Debug("Loaded config.yaml from file system: " + configFilePath)
 	}
 
 	var newConfig Config
@@ -144,13 +152,77 @@ func loadConfigFromFile() error {
 
 // configEqual compares two Config structs
 func configEqual(a, b Config) bool {
-	return a.DeviceName == b.DeviceName &&
-		a.NameOfDevice == b.NameOfDevice &&
-		a.Server.HTTPS == b.Server.HTTPS &&
-		a.Server.Port == b.Server.Port &&
-		a.Functions.HttpFileServer == b.Functions.HttpFileServer &&
-		a.Functions.LocalSendServer == b.Functions.LocalSendServer &&
-		a.Webhook.UploadCompleteURL == b.Webhook.UploadCompleteURL
+	if a.DeviceName != b.DeviceName ||
+		a.NameOfDevice != b.NameOfDevice ||
+		a.Server.HTTPS != b.Server.HTTPS ||
+		a.Server.Port != b.Server.Port ||
+		a.Functions.HttpFileServer != b.Functions.HttpFileServer ||
+		a.Functions.LocalSendServer != b.Functions.LocalSendServer {
+		return false
+	}
+
+	// Compare webhook endpoints
+	if len(a.Webhook.UploadComplete) != len(b.Webhook.UploadComplete) {
+		return false
+	}
+	for i, endpoint := range a.Webhook.UploadComplete {
+		if i >= len(b.Webhook.UploadComplete) {
+			return false
+		}
+		if endpoint.URL != b.Webhook.UploadComplete[i].URL {
+			return false
+		}
+		// Compare params (deep comparison)
+		if !compareParams(endpoint.Params, b.Webhook.UploadComplete[i].Params) {
+			return false
+		}
+	}
+	return true
+}
+
+// compareParams compares two parameter maps recursively
+func compareParams(a, b map[string]interface{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, aVal := range a {
+		bVal, ok := b[key]
+		if !ok {
+			return false
+		}
+		if !deepEqual(aVal, bVal) {
+			return false
+		}
+	}
+	return true
+}
+
+// deepEqual compares two interface{} values recursively
+func deepEqual(a, b interface{}) bool {
+	switch aVal := a.(type) {
+	case map[string]interface{}:
+		bVal, ok := b.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		return compareParams(aVal, bVal)
+	case []interface{}:
+		bVal, ok := b.([]interface{})
+		if !ok {
+			return false
+		}
+		if len(aVal) != len(bVal) {
+			return false
+		}
+		for i := range aVal {
+			if !deepEqual(aVal[i], bVal[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return a == b
+	}
 }
 
 // notifyConfigChange calls all registered listeners
@@ -180,8 +252,50 @@ func GetPort() int {
 	return ServerPort
 }
 
-func GetWebhookURL() string {
-	return ConfigData.Webhook.UploadCompleteURL
+func GetWebhookEndpoints() []WebhookEndpoint {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	// Return a copy to prevent external modifications
+	endpointsCopy := make([]WebhookEndpoint, len(ConfigData.Webhook.UploadComplete))
+	for i, endpoint := range ConfigData.Webhook.UploadComplete {
+		paramsCopy := make(map[string]interface{}, len(endpoint.Params))
+		for k, v := range endpoint.Params {
+			// Convert map[interface{}]interface{} to map[string]interface{} recursively
+			paramsCopy[k] = convertConfigValueToStringMap(v)
+		}
+		endpointsCopy[i] = WebhookEndpoint{
+			URL:    endpoint.URL,
+			Params: paramsCopy,
+		}
+	}
+	return endpointsCopy
+}
+
+// convertConfigValueToStringMap recursively converts interface{} values containing map[interface{}]interface{} to map[string]interface{}
+func convertConfigValueToStringMap(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[interface{}]interface{}:
+		result := make(map[string]interface{})
+		for key, val := range v {
+			keyStr := fmt.Sprintf("%v", key)
+			result[keyStr] = convertConfigValueToStringMap(val)
+		}
+		return result
+	case map[string]interface{}:
+		result := make(map[string]interface{})
+		for key, val := range v {
+			result[key] = convertConfigValueToStringMap(val)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			result[i] = convertConfigValueToStringMap(item)
+		}
+		return result
+	default:
+		return v
+	}
 }
 
 func GetProtocol() string {

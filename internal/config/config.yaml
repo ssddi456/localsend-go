@@ -12,3 +12,26 @@ server:
 functions:
   http_file_server: true
   local_send_server: true
+
+
+# Webhook configuration
+webhook:
+  # Multiple webhook endpoints for upload complete notifications
+  # Each endpoint has its own URL and parameters
+  upload_complete:
+    - url: "http://localhost:48817/api/v1/tasks"
+      params:
+        command: "screenshot_description"
+        name: "处理图片 {FileName}"
+        parameters:
+          image_path: "{FilePath}"
+          file_name: "{FileName}"
+          file_size: "{FileSize}"
+        working_dir: ""
+        env: {}
+    # Uncomment to add more endpoints
+    # - url: "https://your-api.example.com/webhook"
+    #   params:
+    #     token: "your-api-token"
+    #     channel: "uploads"
+    #     message: "File {FileName} uploaded successfully"

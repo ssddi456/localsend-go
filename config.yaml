@@ -15,6 +15,17 @@ functions:
 
 # Webhook configuration
 webhook:
-  # URL to send upload complete notifications to
-  # Leave empty to disable webhook
-  upload_complete_url: ""
+  # Multiple webhook endpoints for upload complete notifications
+  # Each endpoint has its own URL and parameters
+  upload_complete: []
+  # Example:
+  # upload_complete:
+  #   - url: "https://api.example.com/webhook"
+  #     params:
+  #       token: "your-api-token"
+  #       channel: "uploads"
+  #       message: "File {FileName} uploaded successfully"
+  #   - url: "http://localhost:8080/notify"
+  #     params:
+  #       notification_type: "file_upload"
+  #       title: "Upload Complete: {FileName}"

@@ -50,6 +50,18 @@ deps:
 format:
 	go fmt ./...
 
+# 热重载开发模式（需要先安装 air: go install github.com/cosmtrek/air@latest）
+.PHONY: dev
+dev:
+	@command -v air >/dev/null 2>&1 || (echo "air 未安装，正在安装..." && go install github.com/cosmtrek/air@latest)
+	air
+
+# 安装 air 工具
+.PHONY: install-air
+install-air:
+	go install github.com/cosmtrek/air@latest
+	@echo "air 已安装成功"
+
 # 使用方法
 .PHONY: help
 help:
@@ -60,4 +72,6 @@ help:
 	@echo "  make build      - 编译所有平台的可执行文件"
 	@echo "  make test       - 运行测试"
 	@echo "  make deps       - 安装依赖"
+	@echo "  make dev        - 启动热重载开发模式（需要 air 工具）"
+	@echo "  make install-air - 安装 air 热重载工具"
 	@echo "  make help       - 显示此帮助信息"

@@ -4,3 +4,5 @@ localsend-go.exe
 uploads
 logs
 localsend-go.exe~
+tmp/
+build-errors.log

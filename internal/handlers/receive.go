@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meowrain/localsend-go/internal/config"
 	"github.com/meowrain/localsend-go/internal/models"
 	"github.com/meowrain/localsend-go/internal/pkg/webhook"
 
@@ -194,6 +193,6 @@ func ReceiveHandler(w http.ResponseWriter, r *http.Request) {
 		absPath = filePath // 如果失败，使用相对路径
 	}
 	// 发送成功的webhook通知
-	webhook.SendUploadCompleteWebhook(config.GetWebhookURL(), absPath, fileName, fileSize, true, "")
+	webhook.SendUploadCompleteWebhook(absPath, fileName, fileSize, true, "")
 	w.WriteHeader(http.StatusOK)
 }

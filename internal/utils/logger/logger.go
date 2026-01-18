@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/windows/svc"
 )
 
 type Logger struct {
@@ -34,15 +36,55 @@ var (
 
 // DefaultConfig 返回默认配置
 func DefaultConfig() LogConfig {
+	// 检测是否在 Windows 服务环境中运行
+	isService, err := svc.IsWindowsService()
+	output := io.Writer(os.Stdout)
+	formatter := &logrus.TextFormatter{
+		FullTimestamp: true,
+		ForceColors:   true,
+	}
+
+	// 如果在 svc 中运行，输出到文件而不是 stdout
+	if err == nil && isService {
+		logFile, err := getServiceLogFile()
+		if err == nil {
+			output = logFile
+			// 服务模式下禁用颜色
+			formatter = &logrus.TextFormatter{
+				FullTimestamp: true,
+				ForceColors:   false,
+			}
+		}
+	}
+
 	return LogConfig{
-		Level:  logrus.InfoLevel,
-		Output: os.Stdout,
-		Formatter: &logrus.TextFormatter{
-			FullTimestamp: true,
-			ForceColors:   true,
-		},
+		Level:        logrus.InfoLevel,
+		Output:       output,
+		Formatter:    formatter,
 		ReportCaller: false,
 	}
+}
+
+// getServiceLogFile 获取服务日志文件
+func getServiceLogFile() (io.Writer, error) {
+	// 尝试在程序所在目录创建 logs 目录
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+
+	logDir := filepath.Join(filepath.Dir(exePath), "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return nil, err
+	}
+
+	logFilePath := filepath.Join(logDir, "localsend-service.log")
+	file, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+
+	return file, nil
 }
 
 // InitLogger 初始化 Logger

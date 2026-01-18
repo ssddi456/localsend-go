@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,6 +24,7 @@ import (
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 	"github.com/meowrain/localsend-go/static"
 	qrcode "github.com/skip2/go-qrcode"
+	"golang.org/x/sys/windows/svc"
 )
 
 type textInputModel struct {
@@ -29,6 +32,230 @@ type textInputModel struct {
 	cursor      int
 	placeholder string
 	done        bool
+}
+
+// serviceHandler 实现 Windows 服务处理接口
+type serviceHandler struct {
+	httpServer *http.ServeMux
+	port       int
+	stopChan   chan struct{}
+}
+
+// Execute 实现 svc.Handler 接口
+func (m *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
+	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
+
+	// 发送启动中状态
+	if err := sendStatus(changes, svc.Status{State: svc.StartPending}); err != nil {
+		logger.Errorf("Failed to send StartPending status: %v", err)
+		return true, uint32(1)
+	}
+
+	// 启动后台服务
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("Service goroutine panic: %v", r)
+			}
+		}()
+		m.startReceiveServer()
+	}()
+
+	// 发送运行状态
+	if err := sendStatus(changes, svc.Status{State: svc.Running, Accepts: cmdsAccepted}); err != nil {
+		logger.Errorf("Failed to send Running status: %v", err)
+		return true, uint32(1)
+	}
+	logger.Info("Windows Service started successfully")
+
+	for {
+		select {
+		case c := <-r:
+			switch c.Cmd {
+			case svc.Interrogate:
+				if err := sendStatus(changes, c.CurrentStatus); err != nil {
+					logger.Errorf("Failed to send Interrogate status: %v", err)
+				}
+
+			case svc.Stop, svc.Shutdown:
+				logger.Info("Service stopping...")
+				if err := sendStatus(changes, svc.Status{State: svc.StopPending}); err != nil {
+					logger.Errorf("Failed to send StopPending status: %v", err)
+				}
+				closeStopChan(m.stopChan)
+				if err := sendStatus(changes, svc.Status{State: svc.Stopped}); err != nil {
+					logger.Errorf("Failed to send Stopped status: %v", err)
+				}
+				return false, 0
+
+			default:
+				logger.Warnf("Unexpected service control: %v", c)
+			}
+
+		case <-m.stopChan:
+			if err := sendStatus(changes, svc.Status{State: svc.Stopped}); err != nil {
+				logger.Errorf("Failed to send final Stopped status: %v", err)
+			}
+			return false, 0
+		}
+	}
+}
+
+// sendStatus 安全地发送服务状态
+func sendStatus(changes chan<- svc.Status, status svc.Status) error {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("panic while sending status: %v", r)
+		}
+	}()
+
+	select {
+	case changes <- status:
+		return nil
+	case <-time.After(time.Second * 5):
+		return fmt.Errorf("timeout sending status")
+	}
+}
+
+// closeStopChan 安全地关闭 stopChan
+func closeStopChan(ch chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warnf("panic while closing stopChan: %v", r)
+		}
+	}()
+
+	select {
+	case ch <- struct{}{}:
+	default:
+		// 如果 channel 已关闭或已满，不做操作
+	}
+}
+
+// startReceiveServer 启动接收服务器
+func (m *serviceHandler) startReceiveServer() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("startReceiveServer panic: %v", r)
+		}
+	}()
+
+	// 创建上传目录
+	if err := os.MkdirAll("uploads", 0o755); err != nil {
+		logger.Errorf("Failed to create uploads directory: %v", err)
+		closeStopChan(m.stopChan)
+		return
+	}
+
+	// 启动 HTTP/HTTPS 服务器（如果已配置）
+	if config.ConfigData.Functions.LocalSendServer {
+		// 配置处理器
+		if err := m.configureHandlers(); err != nil {
+			logger.Errorf("Failed to configure handlers: %v", err)
+			closeStopChan(m.stopChan)
+			return
+		}
+
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("HTTP server goroutine panic: %v", r)
+				}
+			}()
+			m.startHTTPServer()
+		}()
+	}
+
+	// 启动广播发现
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("Broadcast goroutine panic: %v", r)
+			}
+		}()
+		discovery.ListenAndStartBroadcasts(nil)
+	}()
+
+	logger.Info("Service: Waiting to receive files...")
+
+	// 持续等待，直到收到停止信号
+	<-m.stopChan
+	logger.Info("Service stopped, cleaning up...")
+}
+
+// configureHandlers 配置服务处理器
+func (m *serviceHandler) configureHandlers() error {
+	if m.httpServer == nil {
+		return fmt.Errorf("httpServer is nil")
+	}
+
+	handlers := map[string]http.HandlerFunc{
+		"/api/localsend/v1/info":           handlers.GetInfoV1Handler,
+		"/api/localsend/v1/register":       handlers.RegisterV1Handler,
+		"/api/localsend/v1/send-request":   handlers.SendRequestV1Handler,
+		"/api/localsend/v1/send":           handlers.SendV1Handler,
+		"/api/localsend/v1/cancel":         handlers.CancelV1Handler,
+		"/api/localsend/v2/prepare-upload": handlers.PrepareReceive,
+		"/api/localsend/v2/upload":         handlers.ReceiveHandler,
+		"/api/localsend/v2/info":           handlers.GetInfoV2Handler,
+		"/api/localsend/v2/cancel":         handlers.HandleCancel,
+	}
+
+	for path, handler := range handlers {
+		if handler == nil {
+			logger.Warnf("Handler for %s is nil", path)
+			continue
+		}
+		m.httpServer.HandleFunc(path, handler)
+	}
+
+	return nil
+}
+
+// startHTTPServer 启动 HTTP/HTTPS 服务器
+func (m *serviceHandler) startHTTPServer() {
+	protocol := "HTTP"
+	if config.ConfigData.Server.HTTPS {
+		protocol = "HTTPS"
+	}
+	logger.Infof("Service: Server started at :%d (%s)", m.port, protocol)
+
+	if config.ConfigData.Server.HTTPS {
+		if err := m.startHTTPSServer(); err != nil {
+			logger.Failedf("HTTPS server failed: %v", err)
+		}
+	} else {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", m.port), m.httpServer); err != nil {
+			logger.Failedf("HTTP server failed: %v", err)
+		}
+	}
+}
+
+// startHTTPSServer 启动 HTTPS 服务器
+func (m *serviceHandler) startHTTPSServer() error {
+	ctx := security.GetSecurityContext()
+	if ctx == nil {
+		return fmt.Errorf("security context not initialized")
+	}
+
+	tlsConfig, err := ctx.GetTLSConfig()
+	if err != nil {
+		return fmt.Errorf("failed to get TLS config: %w", err)
+	}
+
+	server := &http.Server{
+		Addr:      fmt.Sprintf(":%d", m.port),
+		Handler:   m.httpServer,
+		TLSConfig: tlsConfig,
+	}
+
+	logger.Debugf("Certificate fingerprint: %s", ctx.CertificateHash)
+
+	if err := server.ListenAndServeTLS("", ""); err != nil {
+		return fmt.Errorf("TLS server error: %w", err)
+	}
+
+	return nil
 }
 
 func initialTextInputModel() textInputModel {
@@ -388,45 +615,24 @@ func ExitMode() {
 	os.Exit(0)
 }
 
+// handleWindowsServiceMode 处理 Windows 服务模式启动
+func handleWindowsServiceMode(httpServer *http.ServeMux, port int) {
+	logger.Info("Starting in Windows Service mode...")
+	h := &serviceHandler{
+		httpServer: httpServer,
+		port:       port,
+		stopChan:   make(chan struct{}),
+	}
+
+	if err := svc.Run("LocalSendService", h); err != nil {
+		logger.Failedf("Service run failed: %v", err)
+		os.Exit(1)
+	} else {
+		logger.Info("Service stopped.")
+	}
+}
+
 func flagParse(httpServer *http.ServeMux, port int, flagOpen *bool) {
-	showHelp := func() {
-		fmt.Println("Usage: <command> [arguments]")
-		fmt.Println("Commands:")
-		fmt.Println("  web                       Start Web mode")
-		fmt.Println("  send <file_path>          Start Send mode (file path required)")
-		fmt.Println("  receive                   Start Receive mode")
-		fmt.Println("  daemon                    Start Receive mode in background (for service)")
-		fmt.Println("  service install           Install Receive mode as system service (auto-start on boot)")
-		fmt.Println("  service uninstall         Uninstall system service")
-		fmt.Println("  service start             Start the system service")
-		fmt.Println("  service stop              Stop the system service")
-		fmt.Println("  service status            Check system service status")
-		fmt.Println("  help                      Display this help information")
-		fmt.Println("Options:")
-		fmt.Println("  --help                    Display this help information")
-		fmt.Println("  --port=<number>           Specify server port (default: 53317)")
-		fmt.Println("  --config=<path>           Specify custom config file path")
-		fmt.Println("  --daemon                  Start Receive mode in background")
-		fmt.Println("")
-		fmt.Println("Examples:")
-		fmt.Println("  localsend-go receive")
-		fmt.Println("  localsend-go send /path/to/file")
-		fmt.Println("  localsend-go --config=/etc/localsend/config.yaml receive")
-		fmt.Println("  localsend-go service install   (requires admin/root)")
-		fmt.Println("  localsend-go service status")
-	}
-	flag.Usage = showHelp
-	// 解析标准flag参数
-	flag.Parse()
-
-	// 检查是否有 --help 参数
-	for _, arg := range os.Args {
-		if arg == "--help" || arg == "-h" {
-			showHelp()
-			ExitMode()
-		}
-	}
-
 	if len(os.Args) > 1 {
 		*flagOpen = true
 		mode := os.Args[1]
@@ -447,13 +653,6 @@ func flagParse(httpServer *http.ServeMux, port int, flagOpen *bool) {
 			ReceiveMode()
 		case "daemon":
 			ReceiveModeBackground()
-		case "service":
-			if len(os.Args) > 2 {
-				handleServiceCommand(os.Args[2])
-			} else {
-				logger.Error("Service command required: install, uninstall, start, stop, status")
-				ExitMode()
-			}
 		case "help":
 			showHelp()
 			ExitMode()
@@ -518,13 +717,80 @@ var port int
 var daemonMode bool
 var configPath string
 
+func showHelp() {
+	fmt.Println("Usage: <command> [arguments]")
+	fmt.Println("Commands:")
+	fmt.Println("  web                       Start Web mode")
+	fmt.Println("  send <file_path>          Start Send mode (file path required)")
+	fmt.Println("  receive                   Start Receive mode")
+	fmt.Println("  daemon                    Start Receive mode in background (for service)")
+	fmt.Println("  service install           Install Receive mode as system service (auto-start on boot)")
+	fmt.Println("  service uninstall         Uninstall system service")
+	fmt.Println("  service start             Start the system service")
+	fmt.Println("  service stop              Stop the system service")
+	fmt.Println("  service status            Check system service status")
+	fmt.Println("  help                      Display this help information")
+	fmt.Println("Options:")
+	fmt.Println("  --help                    Display this help information")
+	fmt.Println("  --port=<number>           Specify server port (default: 53317)")
+	fmt.Println("  --config=<path>           Specify custom config file path")
+	fmt.Println("  --daemon                  Start Receive mode in background")
+	fmt.Println("")
+	fmt.Println("Examples:")
+	fmt.Println("  localsend-go receive")
+	fmt.Println("  localsend-go send /path/to/file")
+	fmt.Println("  localsend-go --config=/etc/localsend/config.yaml receive")
+	fmt.Println("  localsend-go service install   (requires admin/root)")
+	fmt.Println("  localsend-go service status")
+}
+
 func init() {
 	flag.IntVar(&port, "port", 0, "Port to listen on (default from config or 53317)")
 	flag.BoolVar(&daemonMode, "daemon", false, "Start in daemon mode (background)")
 	flag.StringVar(&configPath, "config", "", "Path to custom config file (default: ./internal/config/config.yaml)")
+	flag.Usage = showHelp
 }
 
 func main() {
+	// 手动解析命令行参数以支持 command --flag 的格式
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if arg == "--port" && i+1 < len(os.Args) {
+			if p, err := strconv.Atoi(os.Args[i+1]); err == nil {
+				port = p
+			}
+			i++
+		} else if arg == "--daemon" {
+			daemonMode = true
+		} else if arg == "--config" && i+1 < len(os.Args) {
+			configPath = os.Args[i+1]
+			i++
+		} else if strings.HasPrefix(arg, "--port=") {
+			if p, err := strconv.Atoi(arg[7:]); err == nil {
+				port = p
+			}
+		} else if strings.HasPrefix(arg, "--config=") {
+			configPath = arg[9:]
+		}
+	}
+
+	// 检查是否有 --help 参数
+	for _, arg := range os.Args {
+		if arg == "--help" || arg == "-h" {
+			showHelp()
+			ExitMode()
+		}
+	}
+
+	logger.Info("========================")
+	logger.Info("========================")
+	logger.Info("start args is " + strings.Join(os.Args, " "))
+	logger.Info("parsed config path: " + configPath)
+	logger.Info("parsed port: " + fmt.Sprintf("%d", port))
+	logger.Info("parsed daemon mode: " + fmt.Sprintf("%v", daemonMode))
+	logger.Info("========================")
+	logger.Info("========================")
+
 	var flagOpen bool = false
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
@@ -543,10 +809,18 @@ func main() {
 
 	// Use port from flag if specified, otherwise from config
 	if port == 0 {
-		port = config.ConfigData.Server.Port
-		if port == 0 {
-			port = 53317
+		port = config.GetPort()
+	}
+
+	// 检查是否是 service 命令，如果是则直接处理后退出，不启动服务器
+	if len(os.Args) > 1 && os.Args[1] == "service" {
+		if len(os.Args) > 2 {
+			handleServiceCommand(os.Args[2])
+		} else {
+			logger.Error("Service command required: install, uninstall, start, stop, status")
+			ExitMode()
 		}
+		return
 	}
 
 	// Start HTTP/HTTPS server
@@ -617,6 +891,20 @@ func main() {
 			}
 		}
 	}()
+	logger.Info(fmt.Sprintf("LocalSend CLI started. Listening on port %d daemonMode %v", port, daemonMode))
+
+	// 处理 Windows 服务模式（使用 svc.IsWindowsService() 自动检测）
+	if daemonMode {
+		isService, err := svc.IsWindowsService()
+		if err == nil && isService {
+			handleWindowsServiceMode(httpServer, port)
+			return
+		}
+		// 如果不是 Windows 服务，使用后台模式
+		ReceiveModeBackground()
+		return
+	}
+
 	// 参数解析
 	flagParse(httpServer, port, &flagOpen)
 
@@ -650,8 +938,5 @@ func main() {
 		if mode == "🌎 Web" {
 			WebServerMode(httpServer, port)
 		}
-	} else if daemonMode {
-		// 如果指定了 --daemon 标志，使用后台模式
-		ReceiveModeBackground()
 	}
 }

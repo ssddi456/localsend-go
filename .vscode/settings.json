@@ -1,0 +1,14 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "Get-Item": true,
+        "go": true,
+        ".\\localsend-go.exe": true
+    },
+    "github.copilot.chat.localeOverride": "zh-CN",
+    "github.copilot.chat.commitMessageGeneration.instructions": [
+        {
+            "type": "text",
+            "text": "请使用中文生成简洁的 Git 提交信息，遵循 Conventional Commits 规范。"
+        }
+    ]
+}

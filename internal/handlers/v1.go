@@ -250,8 +250,14 @@ func SendV1Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logger.Success("V1 File saved to:", filePath)
+	// 转换为绝对路径
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		logger.Errorf("Failed to get absolute path: %v", err)
+		absPath = filePath // 如果失败，使用相对路径
+	}
 	// 发送成功的webhook通知
-	webhook.SendUploadCompleteWebhook(config.GetWebhookURL(), filePath, fileName, fileSize, true, "")
+	webhook.SendUploadCompleteWebhook(config.GetWebhookURL(), absPath, fileName, fileSize, true, "")
 	w.WriteHeader(http.StatusOK)
 }
 

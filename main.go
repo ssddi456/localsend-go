@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -14,6 +16,7 @@ import (
 	"github.com/meowrain/localsend-go/internal/config"
 	"github.com/meowrain/localsend-go/internal/pkg/security"
 	"github.com/meowrain/localsend-go/internal/pkg/server"
+	"github.com/meowrain/localsend-go/internal/pkg/tray"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 	"golang.org/x/sys/windows/svc"
 )
@@ -30,6 +33,16 @@ func init() {
 }
 
 func main() {
+	// 切换到可执行文件所在目录
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		if err := os.Chdir(exeDir); err != nil {
+			fmt.Printf("Warning: Failed to change working directory to %s: %v\n", exeDir, err)
+		} else {
+			fmt.Printf("Working directory set to: %s\n", exeDir)
+		}
+	}
+
 	// 手动解析命令行参数以支持 command --flag 的格式
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
@@ -68,15 +81,35 @@ func main() {
 	logger.Info("========================")
 
 	var flagOpen bool = false
+
+	// 设置信号处理，监听 Ctrl+C (SIGINT) 和 SIGTERM
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	// 在后台处理信号
 	go func() {
-		<-signalChan
-		fmt.Println("\n收到中断信号，正在退出...")
+		sig := <-signalChan
+		logger.Info(fmt.Sprintf("收到信号: %v", sig))
+		fmt.Println("\n\n收到中断信号 (Ctrl+C)，正在优雅关闭...")
+
+		// 执行清理操作
+		logger.Info("正在清理资源...")
+
+		// 这里可以添加更多清理逻辑，比如：
+		// - 关闭数据库连接
+		// - 保存未完成的工作
+		// - 通知其他 goroutine 停止
+
+		logger.Info("程序已安全退出")
 		os.Exit(0)
 	}()
 
 	logger.InitLogger()
+
+	// Initialize system tray on Windows
+	if runtime.GOOS == "windows" {
+		go tray.Initialize()
+	}
 
 	// Initialize security context (certificate)
 	if err := security.Initialize(); err != nil {

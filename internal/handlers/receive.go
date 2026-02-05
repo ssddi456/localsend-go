@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/meowrain/localsend-go/internal/models"
+	"github.com/meowrain/localsend-go/internal/pkg/notification"
 	"github.com/meowrain/localsend-go/internal/pkg/webhook"
 
 	"github.com/meowrain/localsend-go/internal/utils/clipboard"
@@ -194,5 +195,7 @@ func ReceiveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// 发送成功的webhook通知
 	webhook.SendUploadCompleteWebhook(absPath, fileName, fileSize, true, "")
+	// 发送桌面通知
+	notification.SendFileReceivedNotification(fileName, absPath)
 	w.WriteHeader(http.StatusOK)
 }

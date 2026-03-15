@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -88,6 +92,16 @@ func SendUploadCompleteWebhook(filePath string, fileName string, fileSize int64,
 
 // sendWebhookToEndpoint sends webhook to a single endpoint with its parameters
 func sendWebhookToEndpoint(index int, endpoint config.WebhookEndpoint, payload UploadCompletePayload, placeholders map[string]string) {
+	webhookType := strings.ToLower(strings.TrimSpace(endpoint.Type))
+	if webhookType == "" {
+		webhookType = "json"
+	}
+
+	if webhookType == "upload" {
+		sendWebhookUpload(index, endpoint, payload, placeholders)
+		return
+	}
+
 	// Prepare the main webhook data
 	webhookData := map[string]interface{}{
 		"payload": payload,
@@ -109,6 +123,72 @@ func sendWebhookToEndpoint(index int, endpoint config.WebhookEndpoint, payload U
 	}
 
 	sendWebhookJSON(index, endpoint.URL, jsonData)
+}
+
+// sendWebhookUpload sends webhook as multipart/form-data with file field.
+// It matches curl style: -F "file=@./test.png"
+func sendWebhookUpload(index int, endpoint config.WebhookEndpoint, payload UploadCompletePayload, placeholders map[string]string) {
+	file, err := os.Open(payload.FilePath)
+	if err != nil {
+		logger.Errorf("Failed to open upload file for webhook endpoint %d (%s): %v", index, endpoint.URL, err)
+		return
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	uploadFileName := payload.FileName
+	if uploadFileName == "" {
+		uploadFileName = filepath.Base(payload.FilePath)
+	}
+
+	fileWriter, err := writer.CreateFormFile("file", uploadFileName)
+	if err != nil {
+		logger.Errorf("Failed to create multipart file field for endpoint %d (%s): %v", index, endpoint.URL, err)
+		return
+	}
+
+	if _, err := io.Copy(fileWriter, file); err != nil {
+		logger.Errorf("Failed to write file into multipart request for endpoint %d (%s): %v", index, endpoint.URL, err)
+		return
+	}
+
+	if len(endpoint.Params) > 0 {
+		customParams := replacePlaceholdersInParams(endpoint.Params, placeholders)
+		customParams = convertToStringMap(customParams).(map[string]interface{})
+		for key, value := range customParams {
+			if key == "file" {
+				continue
+			}
+			if err := writer.WriteField(key, stringifyFormValue(value)); err != nil {
+				logger.Warnf("Failed to add multipart field %s for endpoint %d (%s): %v", key, index, endpoint.URL, err)
+			}
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		logger.Errorf("Failed to finalize multipart body for endpoint %d (%s): %v", index, endpoint.URL, err)
+		return
+	}
+
+	sendWebhookMultipart(index, endpoint.URL, body, writer.FormDataContentType())
+}
+
+// stringifyFormValue converts params value to form field text.
+func stringifyFormValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		jsonBytes, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(jsonBytes)
+	}
 }
 
 // replacePlaceholdersInParams recursively replaces placeholders in parameter values
@@ -199,5 +279,33 @@ func sendWebhookJSON(index int, apiEndpoint string, jsonData []byte) {
 		logger.Infof("Webhook sent successfully to endpoint %d: %s", index, apiEndpoint)
 	} else {
 		logger.Warnf("Webhook to endpoint %d (%s) returned status code: %d", index, apiEndpoint, resp.StatusCode)
+	}
+}
+
+// sendWebhookMultipart sends the webhook as multipart/form-data via POST
+func sendWebhookMultipart(index int, apiEndpoint string, body *bytes.Buffer, contentType string) {
+	req, err := http.NewRequest("POST", apiEndpoint, body)
+	if err != nil {
+		logger.Errorf("Failed to create multipart webhook request for endpoint %d (%s): %v", index, apiEndpoint, err)
+		return
+	}
+
+	req.Header.Set("Content-Type", contentType)
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Errorf("Failed to send multipart webhook to endpoint %d (%s): %v", index, apiEndpoint, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		logger.Infof("Multipart webhook sent successfully to endpoint %d: %s", index, apiEndpoint)
+	} else {
+		logger.Warnf("Multipart webhook to endpoint %d (%s) returned status code: %d", index, apiEndpoint, resp.StatusCode)
 	}
 }

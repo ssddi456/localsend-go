@@ -14,7 +14,6 @@ import (
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 	"github.com/meowrain/localsend-go/static"
 	qrcode "github.com/skip2/go-qrcode"
-	"golang.org/x/sys/windows/svc"
 )
 
 // WebServerMode Web 服务器模式
@@ -95,23 +94,6 @@ func SendMode(filePath string) {
 func ExitMode() {
 	fmt.Println("Exiting program...")
 	os.Exit(0)
-}
-
-// handleWindowsServiceMode 处理 Windows 服务模式启动
-func handleWindowsServiceMode(httpServer *http.ServeMux, port int) {
-	logger.Info("Starting in Windows Service mode...")
-	h := &serviceHandler{
-		httpServer: httpServer,
-		port:       port,
-		stopChan:   make(chan struct{}),
-	}
-
-	if err := svc.Run("LocalSendService", h); err != nil {
-		logger.Failedf("Service run failed: %v", err)
-		os.Exit(1)
-	} else {
-		logger.Info("Service stopped.")
-	}
 }
 
 // startServer 启动 HTTP/HTTPS 服务器

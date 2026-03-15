@@ -20,6 +20,8 @@ webhook:
   # Each endpoint has its own URL and parameters
   upload_complete:
     - url: "http://localhost:48817/api/v1/tasks"
+      # type: json (default) | upload
+      type: "json"
       params:
         command: "screenshot_description"
         name: "处理图片 {FileName}"
@@ -31,7 +33,13 @@ webhook:
         env: {}
     # Uncomment to add more endpoints
     # - url: "https://your-api.example.com/webhook"
+    #   type: "json"
     #   params:
     #     token: "your-api-token"
     #     channel: "uploads"
     #     message: "File {FileName} uploaded successfully"
+    # - url: "http://127.0.0.1:9090/api/upload"
+    #   type: "upload"
+    #   params:
+    #     source: "localsend"
+    #     status: "{Status}"

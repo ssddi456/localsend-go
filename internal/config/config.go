@@ -40,6 +40,7 @@ type Config struct {
 // WebhookEndpoint represents a single webhook endpoint with its URL and parameters
 type WebhookEndpoint struct {
 	URL    string                 `yaml:"url"`
+	Type   string                 `yaml:"type"`
 	Params map[string]interface{} `yaml:"params"`
 }
 
@@ -172,6 +173,9 @@ func configEqual(a, b Config) bool {
 		if endpoint.URL != b.Webhook.UploadComplete[i].URL {
 			return false
 		}
+		if endpoint.Type != b.Webhook.UploadComplete[i].Type {
+			return false
+		}
 		// Compare params (deep comparison)
 		if !compareParams(endpoint.Params, b.Webhook.UploadComplete[i].Params) {
 			return false
@@ -265,6 +269,7 @@ func GetWebhookEndpoints() []WebhookEndpoint {
 		}
 		endpointsCopy[i] = WebhookEndpoint{
 			URL:    endpoint.URL,
+			Type:   endpoint.Type,
 			Params: paramsCopy,
 		}
 	}

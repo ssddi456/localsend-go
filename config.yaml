@@ -17,15 +17,22 @@ functions:
 webhook:
   # Multiple webhook endpoints for upload complete notifications
   # Each endpoint has its own URL and parameters
-  upload_complete: []
   # Example:
   # upload_complete:
   #   - url: "https://api.example.com/webhook"
+  #     type: "json"
   #     params:
   #       token: "your-api-token"
   #       channel: "uploads"
   #       message: "File {FileName} uploaded successfully"
   #   - url: "http://localhost:8080/notify"
+  #     type: "json"
   #     params:
   #       notification_type: "file_upload"
   #       title: "Upload Complete: {FileName}"
+  upload_complete:
+    - url: "http://127.0.0.1:9090/api/upload"
+      type: "upload"
+      params:
+        source: "localsend"
+        status: "{Status}"

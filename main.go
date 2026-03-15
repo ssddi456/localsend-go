@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,7 +17,6 @@ import (
 	"github.com/meowrain/localsend-go/internal/pkg/server"
 	"github.com/meowrain/localsend-go/internal/pkg/tray"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
-	"golang.org/x/sys/windows/svc"
 )
 
 var port int
@@ -105,11 +103,8 @@ func main() {
 	}()
 
 	logger.InitLogger()
-
-	// Initialize system tray on Windows
-	if runtime.GOOS == "windows" {
-		go tray.Initialize()
-	}
+	go tray.Initialize()
+	defer tray.Stop()
 
 	// Initialize security context (certificate)
 	if err := security.Initialize(); err != nil {
@@ -119,17 +114,6 @@ func main() {
 	// Use port from flag if specified, otherwise from config
 	if port == 0 {
 		port = config.GetPort()
-	}
-
-	// 检查是否是 service 命令，如果是则直接处理后退出，不启动服务器
-	if len(os.Args) > 1 && os.Args[1] == "service" {
-		if len(os.Args) > 2 {
-			handleServiceCommand(os.Args[2])
-		} else {
-			logger.Error("Service command required: install, uninstall, start, stop, status")
-			ExitMode()
-		}
-		return
 	}
 
 	// Start HTTP/HTTPS server
@@ -142,50 +126,43 @@ func main() {
 	startServer(httpServer, port)
 	logger.Info(fmt.Sprintf("LocalSend CLI started. Listening on port %d daemonMode %v", port, daemonMode))
 
-	// 处理 Windows 服务模式（使用 svc.IsWindowsService() 自动检测）
 	if daemonMode {
-		isService, err := svc.IsWindowsService()
-		if err == nil && isService {
-			handleWindowsServiceMode(httpServer, port)
-			return
-		}
-		// 如果不是 Windows 服务，使用后台模式
 		ReceiveModeBackground()
-		return
-	}
+	} else {
+		// 参数解析
+		flagParse(httpServer, port, &flagOpen)
 
-	// 参数解析
-	flagParse(httpServer, port, &flagOpen)
-
-	if !flagOpen {
-		// Run Bubble Tea program
-		p := bubbletea.NewProgram(initialModel(), bubbletea.WithoutSignalHandler())
-		m, err := p.Run()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		mTyped := m.(model)
-		mode := mTyped.mode
-
-		if mode == "❌ Exit" {
-			ExitMode()
-		}
-
-		if mode == "📤 Send" {
-			filePath := mTyped.textInput.Value()
-			if filePath == "" {
-				fmt.Println("Send mode requires a file path")
-				os.Exit(1)
+		if !flagOpen {
+			// Run Bubble Tea program
+			p := bubbletea.NewProgram(initialModel(), bubbletea.WithoutSignalHandler())
+			m, err := p.Run()
+			if err != nil {
+				log.Fatal(err)
 			}
-			SendMode(filePath)
-		}
 
-		if mode == "📥 Receive" {
-			ReceiveMode()
-		}
-		if mode == "🌎 Web" {
-			WebServerMode(httpServer, port)
+			mTyped := m.(model)
+			mode := mTyped.mode
+
+			if mode == "❌ Exit" {
+				ExitMode()
+			}
+
+			if mode == "📤 Send" {
+				filePath := mTyped.textInput.Value()
+				if filePath == "" {
+					fmt.Println("Send mode requires a file path")
+					os.Exit(1)
+				}
+				SendMode(filePath)
+			}
+
+			if mode == "📥 Receive" {
+				ReceiveMode()
+			}
+			if mode == "🌎 Web" {
+				WebServerMode(httpServer, port)
+			}
 		}
 	}
+
 }

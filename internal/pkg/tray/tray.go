@@ -22,6 +22,8 @@ func Initialize() {
 		return
 	}
 
+	logger.Info("Initializing system tray...")
+
 	// Get current working directory for uploads
 	if exePath, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exePath)
@@ -84,6 +86,7 @@ func onReady() {
 
 // onExit is called when the system tray exits
 func onExit() {
+	logger.Info("System tray exiting...")
 	close(quitChan)
 }
 

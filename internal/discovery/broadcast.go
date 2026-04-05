@@ -3,6 +3,7 @@ package discovery
 import (
 	"time"
 
+	"github.com/meowrain/localsend-go/internal/config"
 	"github.com/meowrain/localsend-go/internal/utils/logger"
 
 	"github.com/meowrain/localsend-go/internal/models"
@@ -19,7 +20,10 @@ const (
 func ListenAndStartBroadcasts(updates chan<- []models.SendModel) {
 	logger.Info("Listening for broadcasts...")
 	go ListenForUDPBroadcasts(updates)
-	go ListenForHttpBroadCast(updates)
+	if config.ConfigData.Functions.PingScan {
+		logger.Info("Ping scan enabled, starting HTTP broadcast listener...")
+		go ListenForHttpBroadCast(updates)
+	}
 	logger.Info("Start broadcasts...")
 	go StartUDPBroadcast()
 }

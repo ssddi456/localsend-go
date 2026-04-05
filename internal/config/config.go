@@ -31,6 +31,7 @@ type Config struct {
 	Functions struct {
 		HttpFileServer  bool `yaml:"http_file_server"`
 		LocalSendServer bool `yaml:"local_send_server"`
+		PingScan        bool `yaml:"ping_scan"`
 	} `yaml:"functions"`
 	Webhook struct {
 		UploadComplete []WebhookEndpoint `yaml:"upload_complete"`

@@ -12,6 +12,8 @@ server:
 functions:
   http_file_server: true
   local_send_server: true
+  # Enable ping scan for device discovery (high CPU usage, not recommended)
+  ping_scan: false
 
 
 # Webhook configuration
